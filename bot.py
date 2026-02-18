@@ -1,4 +1,6 @@
-import logging, g4f
+import logging
+import aiohttp
+import json
 from telegram import (
     Update, LabeledPrice,
     InlineKeyboardButton as IKB, InlineKeyboardMarkup as IKM,
@@ -39,15 +41,33 @@ def adm_kb():
 def back_kb():
     return IKM([[IKB("🔙 Админка",callback_data="a_back")]])
 
-async def ask_ai(messages,model_id):
-    try:
-        r=await g4f.ChatCompletion.create_async(model=model_id,messages=messages)
-        return r or "🤔 Пустой ответ"
-    except:
+async def ask_ai(messages, model_id):
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "model": model_id,
+        "messages": messages,
+        "max_tokens": 2048,
+        "temperature": 0.7
+    }
+    async with aiohttp.ClientSession() as session:
+        for url in API_URLS:
+            try:
+                async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        answer = data["choices"][0]["message"]["content"]
+                        if answer and len(answer) > 2:
+                            return answer
+            except:
+                continue
         try:
-            return await g4f.ChatCompletion.create_async(model="gpt-3.5-turbo",messages=messages)
-        except Exception as e:
-            return f"❌ Ошибка: {str(e)[:100]}"
+            import g4f
+            r = await g4f.ChatCompletion.create_async(model="gpt-4o-mini", messages=messages, timeout=30)
+            if r and len(str(r)) > 5:
+                return r
+        except:
+            pass
+    return "⚠️ AI временно недоступен. Попробуйте через минуту или смените модель /model"
 
 async def cmd_start(u,c):
     usr=u.effective_user
@@ -71,8 +91,7 @@ async def cmd_profile(u,c):
     ml=PREM_MSG if prem else FREE_MSG
     il=PREM_IMG if prem else FREE_IMG
     def bar(x,t):
-        if t==0:
-            return "░"*10
+        if t==0: return "░"*10
         p=min(x/t,1)
         return "█"*int(p*10)+"░"*(10-int(p*10))
     st="🚫 Бан" if usr["banned"] else "🔇 Мут" if usr["muted"] else "⭐ Premium" if prem else "🆓 Free"
@@ -144,9 +163,9 @@ async def cmd_image(u,c):
     prompt=" ".join(c.args)
     msg=await u.message.reply_text("🎨 Генерирую... ⏳")
     try:
-        r=await ask_ai([{"role":"user","content":f"Describe image: {prompt}"}],"gpt-4o-mini")
+        r=await ask_ai([{"role":"user","content":f"Create a very detailed, vivid image description in English for an artist to draw: {prompt}. Describe colors, lighting, style, composition, mood in detail."}],"gpt-4o-mini")
         await inc_imgs(uid)
-        await msg.edit_text(f"🎨 <b>Готово!</b>\n\n📝 {prompt}\n\n🖼 {r[:500]}\n\nОсталось: {left-1}",parse_mode="HTML")
+        await msg.edit_text(f"🎨 <b>Готово!</b>\n\n📝 Запрос: <i>{prompt}</i>\n\n🖼 Описание:\n{r[:800]}\n\n🎨 Осталось: {left-1}",parse_mode="HTML")
     except Exception as e:
         await msg.edit_text(f"❌ {e}")
 
@@ -171,7 +190,7 @@ async def handle_ai(u,c):
     mi=MODELS.get(mk,MODELS["gpt4o_mini"])
     await c.bot.send_chat_action(uid,"typing")
     hist=await get_hist(uid,10)
-    msgs=[{"role":"system","content":"Ты FreeGPT, AI-ассистент. Отвечай кратко, полезно, на русском."}]
+    msgs=[{"role":"system","content":"Ты FreeGPT, AI-ассистент. Отвечай кратко, полезно, дружелюбно. Используй русский язык и эмодзи."}]
     msgs.extend(hist)
     msgs.append({"role":"user","content":text})
     answer=await ask_ai(msgs,mi["id"])
@@ -531,24 +550,4 @@ def main():
         ([CQ(a_mute_s,pattern="^a_mute$")],{S_MUTE:[MH(TF,a_mute_1)],S_MUTE_R:[MH(TF,a_mute_2)]}),
         ([CQ(a_unmute_s,pattern="^a_unmute$")],{S_UNMUTE:[MH(TF,a_unmute_1)]}),
         ([CQ(a_promo_s,pattern="^a_promo$")],{S_PC:[MH(TF,a_promo_1)],S_PD:[MH(TF,a_promo_2)],S_PU:[MH(TF,a_promo_3)]}),
-        ([CQ(a_give_s,pattern="^a_give$")],{S_GP:[MH(TF,a_give_1)],S_GPD:[MH(TF,a_give_2)]}),
-        ([CQ(a_rm_s,pattern="^a_rm$")],{S_RP:[MH(TF,a_rm_1)]}),
-        ([CQ(a_bc_s,pattern="^a_bc$")],{S_BC:[MH(TF,a_bc_1)]}),
-        ([CQ(a_find_s,pattern="^a_find$")],{S_FIND:[MH(TF,a_find_1)]}),
-    ]
-    for entries,states in convs:
-        app.add_handler(CV(entry_points=entries,states=states,fallbacks=[cn]))
-    app.add_handler(CQ(a_stats_cb,pattern="^a_stats$"))
-    app.add_handler(CQ(a_users_cb,pattern="^a_users$"))
-    app.add_handler(CQ(a_promos_cb,pattern="^a_promos$"))
-    app.add_handler(CQ(a_back_cb,pattern="^a_back$"))
-    app.add_handler(CQ(gen_cb))
-    app.add_handler(MH(TF,menu_h))
-    async def post_init(a):
-        await init_db()
-    app.post_init=post_init
-    print("🤖 FreeGPT Started!")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-if __name__=="__main__":
-    main()
+        ([CQ(a_give_s,pattern="^a_give$")],{S_GP:[MH(TF,a_give_1)],S_G
